@@ -648,6 +648,10 @@ h3 {
   background: #f3fbf6;
 }
 
+.page-alert {
+  margin-bottom: -10px;
+}
+
 .pagination {
   display: flex;
   justify-content: center;

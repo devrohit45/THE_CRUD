@@ -60,6 +60,30 @@ Vite forwards `/api` requests to the Laravel server at `127.0.0.1:8000`.
 If Laravel is running on a different address, update the `/api` proxy in
 `frontend/vite.config.js`.
 
+## React application architecture
+
+The React client uses React Router for separate `/login`, `/register`, and
+protected `/files` pages. Redux Toolkit owns shared authentication and file
+library state; the Laravel session cookie remains the source of truth for
+authentication and is not copied into browser storage.
+
+```text
+frontend/src/
+  components/       Route guards and reusable UI components
+  pages/            Login, registration, and file-library pages
+  services/api.js   JSON, multipart, CSRF, and error handling
+  store/
+    index.js        Redux store configuration
+    slices/         Authentication and file-library state/thunks
+  App.jsx           Route definitions and initial session check
+  main.jsx          React, router, and Redux providers
+```
+
+The API service centralizes same-origin requests and Laravel CSRF headers.
+Async thunks in each Redux slice perform API work and store loading, success,
+and error state. Page components dispatch those actions and render the state;
+the route guards prevent unauthenticated users from entering the file library.
+
 ## API reference
 
 All endpoints are prefixed with `/api`; JSON endpoints accept and return JSON.
@@ -201,14 +225,16 @@ Missing record IDs or missing stored files return `404 Not Found`.
    image-content and download routes. `AuthController` handles session
    registration, login, logout, profile, and CSRF-token requests.
    `backend/bootstrap/app.php` registers these routes with the `/api` prefix.
-6. `frontend/src/App.jsx` handles authentication before loading the library,
-   then loads and filters records, builds multipart submissions, displays
-   errors, and exposes edit/delete/download actions. `_method=PUT` lets
-   Laravel handle multipart updates consistently across PHP environments.
-7. `frontend/src/App.css` and `frontend/src/index.css` define the responsive
+6. `frontend/src/store/slices/authSlice.js` and `filesSlice.js` keep shared
+   authentication/library state and expose async thunks for backend requests.
+   `services/api.js` centralizes same-origin and CSRF-aware fetch requests.
+7. `frontend/src/pages/` separates the login, registration, and library
+   screens. Route guards protect the library, while `App.jsx` defines routes
+   and starts the session check. `_method=PUT` handles multipart updates.
+8. `frontend/src/App.css` and `frontend/src/index.css` define the responsive
    library layout and accessible focus states. `frontend/vite.config.js`
    proxies API calls during development so the browser uses same-origin paths.
-8. `backend/tests/Feature/MediaFileCrudTest.php` verifies the full image CRUD
+9. `backend/tests/Feature/MediaFileCrudTest.php` verifies the full image CRUD
    flow, rejects a mismatched upload, and checks type/search filters.
 
 ### Upload request, step by step
