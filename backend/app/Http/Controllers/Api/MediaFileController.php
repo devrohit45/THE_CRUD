@@ -7,17 +7,19 @@ use App\Http\Resources\MediaFileResource;
 use App\Models\MediaFile;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rules\File;
 use RuntimeException;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class MediaFileController extends Controller
 {
     /**
      * List records with optional type/search filters and stable pagination.
      */
-    public function index(Request $request)
+    public function index(Request $request): AnonymousResourceCollection
     {
         $filters = $request->validate([
             'type' => ['sometimes', 'nullable', 'in:image,document'],
@@ -25,7 +27,7 @@ class MediaFileController extends Controller
             'page' => ['sometimes', 'integer', 'min:1'],
         ]);
 
-        $files = MediaFile::query()
+        $files = $request->user()->mediaFiles()
             ->when($filters['type'] ?? null, fn ($query, $type) => $query->where('type', $type))
             ->when($filters['search'] ?? null, function ($query, $search): void {
                 $query->where(function ($query) use ($search): void {
@@ -36,19 +38,25 @@ class MediaFileController extends Controller
             ->latest()
             ->paginate(12);
 
-        return MediaFileResource::collection($files);
+        return MediaFileResource::collection($files)->additional([
+            'summary' => [
+                'total' => $request->user()->mediaFiles()->count(),
+                'images' => $request->user()->mediaFiles()->where('type', 'image')->count(),
+                'documents' => $request->user()->mediaFiles()->where('type', 'document')->count(),
+            ],
+        ]);
     }
 
     /**
      * Validate and store an upload, then save only its metadata in the database.
      */
-    public function store(Request $request): MediaFileResource
+    public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'title' => ['required', 'string', 'max:150'],
             'description' => ['nullable', 'string', 'max:2000'],
             'type' => ['required', 'in:image,document'],
-            'file' => $this->uploadRules($request->input('type')),
+            'file' => ['required', ...$this->uploadRules($request->input('type'))],
         ]);
 
         /** @var UploadedFile $upload */
@@ -60,6 +68,7 @@ class MediaFileController extends Controller
         }
 
         $mediaFile = MediaFile::create([
+            'user_id' => $request->user()->id,
             'title' => $validated['title'],
             'description' => $validated['description'] ?? null,
             'type' => $validated['type'],
@@ -69,7 +78,17 @@ class MediaFileController extends Controller
             'size' => $upload->getSize(),
         ]);
 
-        return new MediaFileResource($mediaFile);
+        return (new MediaFileResource($mediaFile))->response()->setStatusCode(201);
+    }
+
+    /**
+     * Return one record using the same safe representation as the list endpoint.
+     */
+    public function show(MediaFile $file): MediaFileResource
+    {
+        abort_unless($file->user_id === request()->user()->id, 404);
+
+        return new MediaFileResource($file);
     }
 
     /**
@@ -77,6 +96,8 @@ class MediaFileController extends Controller
      */
     public function update(Request $request, MediaFile $file): MediaFileResource
     {
+        abort_unless($file->user_id === $request->user()->id, 404);
+
         $validated = $request->validate([
             'title' => ['sometimes', 'required', 'string', 'max:150'],
             'description' => ['sometimes', 'nullable', 'string', 'max:2000'],
@@ -112,8 +133,10 @@ class MediaFileController extends Controller
     /**
      * Delete a record and its corresponding private file.
      */
-    public function destroy(MediaFile $file): JsonResponse
+    public function destroy(Request $request, MediaFile $file): JsonResponse
     {
+        abort_unless($file->user_id === $request->user()->id, 404);
+
         $path = $file->path;
         $file->delete();
 
@@ -127,8 +150,9 @@ class MediaFileController extends Controller
     /**
      * Display only image uploads inline; documents must use the download route.
      */
-    public function content(MediaFile $file)
+    public function content(Request $request, MediaFile $file): BinaryFileResponse
     {
+        abort_unless($file->user_id === $request->user()->id, 404);
         abort_unless($file->type === 'image', 404);
 
         return response()->file($this->storedPath($file), [
@@ -140,8 +164,10 @@ class MediaFileController extends Controller
     /**
      * Download the stored upload using its original filename.
      */
-    public function download(MediaFile $file)
+    public function download(Request $request, MediaFile $file): BinaryFileResponse
     {
+        abort_unless($file->user_id === $request->user()->id, 404);
+
         return response()->download($this->storedPath($file), $file->original_name, [
             'X-Content-Type-Options' => 'nosniff',
         ]);
@@ -150,13 +176,13 @@ class MediaFileController extends Controller
     /**
      * Apply separate extension/MIME and size limits to images and documents.
      *
-     * @return array<int, mixed>
+     * @return array<int, File>
      */
     private function uploadRules(?string $type): array
     {
         return $type === 'image'
-            ? ['required', File::image()->types(['jpg', 'jpeg', 'png', 'webp', 'gif'])->max(10240)]
-            : ['required', File::types(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv'])->max(20480)];
+            ? [File::image()->types(['jpg', 'jpeg', 'png', 'webp', 'gif'])->max(10240)]
+            : [File::types(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv'])->max(20480)];
     }
 
     /**
