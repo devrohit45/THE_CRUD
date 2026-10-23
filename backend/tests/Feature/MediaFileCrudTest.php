@@ -1,11 +1,13 @@
 <?php
 
 use App\Models\MediaFile;
+use App\Models\User;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 
 beforeEach(function () {
     Storage::fake('local');
+    $this->actingAs(User::factory()->create());
 });
 
 test('an image can be created, listed, updated, viewed, and deleted', function () {
@@ -27,6 +29,10 @@ test('an image can be created, listed, updated, viewed, and deleted', function (
     $this->getJson('/api/files')
         ->assertOk()
         ->assertJsonPath('data.0.id', $id);
+
+    $this->getJson("/api/files/{$id}")
+        ->assertOk()
+        ->assertJsonPath('data.title', 'Cover image');
 
     $this->get($created->json('data.content_url'))
         ->assertOk()
@@ -58,6 +64,7 @@ test('uploads reject files that do not match the declared resource type', functi
 
 test('the list can be filtered by resource type and title', function () {
     MediaFile::create([
+        'user_id' => auth()->id(),
         'title' => 'Annual report',
         'type' => 'document',
         'original_name' => 'report.pdf',
@@ -67,6 +74,7 @@ test('the list can be filtered by resource type and title', function () {
     ]);
 
     MediaFile::create([
+        'user_id' => auth()->id(),
         'title' => 'Team photo',
         'type' => 'image',
         'original_name' => 'team.png',
@@ -79,4 +87,67 @@ test('the list can be filtered by resource type and title', function () {
         ->assertOk()
         ->assertJsonCount(1, 'data')
         ->assertJsonPath('data.0.title', 'Annual report');
+});
+
+test('file endpoints require authentication', function () {
+    auth()->logout();
+
+    $this->getJson('/api/files')->assertUnauthorized();
+    $this->postJson('/api/files')->assertUnauthorized();
+});
+
+test('accounts can register, log in, and log out using session authentication', function () {
+    auth()->logout();
+
+    $this->postJson('/api/auth/register', [
+        'name' => 'Riley Example',
+        'email' => 'riley@example.com',
+        'password' => 'correct-horse-battery',
+        'password_confirmation' => 'correct-horse-battery',
+    ])->assertCreated()
+        ->assertJsonPath('user.email', 'riley@example.com');
+
+    $this->postJson('/api/auth/logout')->assertOk();
+    $this->postJson('/api/auth/login', [
+        'email' => 'riley@example.com',
+        'password' => 'correct-horse-battery',
+    ])->assertOk()
+        ->assertJsonPath('user.name', 'Riley Example');
+
+    $this->getJson('/api/auth/user')->assertOk()
+        ->assertJsonPath('user.email', 'riley@example.com');
+});
+
+test('accounts cannot read or delete another users files', function () {
+    $owner = User::factory()->create();
+    $file = MediaFile::create([
+        'user_id' => $owner->id,
+        'title' => 'Private report',
+        'type' => 'document',
+        'original_name' => 'report.pdf',
+        'path' => 'media-files/report.pdf',
+        'mime_type' => 'application/pdf',
+        'size' => 100,
+    ]);
+
+    $this->getJson("/api/files/{$file->id}")->assertNotFound();
+    $this->deleteJson("/api/files/{$file->id}")->assertNotFound();
+    $this->assertDatabaseHas('media_files', ['id' => $file->id]);
+});
+
+test('the file list contains only the authenticated users records', function () {
+    $otherUser = User::factory()->create();
+    MediaFile::create([
+        'user_id' => $otherUser->id,
+        'title' => 'Not mine',
+        'type' => 'document',
+        'original_name' => 'private.pdf',
+        'path' => 'media-files/private.pdf',
+        'mime_type' => 'application/pdf',
+        'size' => 100,
+    ]);
+
+    $this->getJson('/api/files')->assertOk()
+        ->assertJsonCount(0, 'data')
+        ->assertJsonPath('summary.total', 0);
 });
