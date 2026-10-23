@@ -34,10 +34,10 @@ if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 php artisan key:generate
 if (-not (Test-Path database/database.sqlite)) { New-Item database/database.sqlite -ItemType File }
 php artisan migrate
-php artisan serve
+php artisan serve --host=127.0.0.1 --port=8001
 ```
 
-The backend listens on `http://127.0.0.1:8000`. The first migration creates
+The backend listens on `http://127.0.0.1:8001`. The first migration creates
 the `media_files` metadata table; uploaded files are saved under
 `backend/storage/app/private/media-files`.
 
@@ -56,9 +56,11 @@ npm run dev
 ```
 
 Open the Vite URL shown in the terminal (normally `http://localhost:5173`).
-Vite forwards `/api` requests to the Laravel server at `127.0.0.1:8000`.
-If Laravel is running on a different address, update the `/api` proxy in
-`frontend/vite.config.js`.
+Vite forwards `/api` requests to the Laravel server at `127.0.0.1:8001`.
+Set `VITE_BACKEND_URL` before starting Vite if you choose a different backend
+address (for example, `$env:VITE_BACKEND_URL = 'http://127.0.0.1:8080'`). The
+proxy destination is read at Vite startup, so restart the frontend dev server
+after changing it.
 
 ## React application architecture
 
