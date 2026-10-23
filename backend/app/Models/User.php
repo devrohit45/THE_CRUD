@@ -48,6 +48,9 @@ class User extends Authenticatable
     /**
      * Return only uploads owned by this account.
      */
+    /**
+     * @return HasMany<MediaFile, $this>
+     */
     public function mediaFiles(): HasMany
     {
         return $this->hasMany(MediaFile::class);
